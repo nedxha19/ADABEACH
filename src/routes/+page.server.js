@@ -1,77 +1,53 @@
+// Load menu data and expose current user. Also includes a minimal reservation action.
 import { query } from '$lib/db/mysql';
-import { redirect } from '@sveltejs/kit';
-import { fail } from '@sveltejs/kit'; // Import fail for action error responses
+import { fail } from '@sveltejs/kit';
 
-// Load main page data
 export async function load({ locals }) {
-    try {
-  
-        const menuItems = await query(`
-            SELECT mi.*, mc.name as category_name 
-            FROM menu_items mi 
-            JOIN menu_categories mc ON mi.category_id = mc.id 
-            ORDER BY mc.name, mi.name
-        `, []);
+  // Fetch items and group by category in JS for clarity/maintainability
+  const items = await query(
+    `SELECT mi.id, mi.name, mi.description, mi.price, mi.image_url,
+            mc.name AS category
+       FROM menu_items mi
+       JOIN menu_categories mc ON mi.category_id = mc.id
+     ORDER BY mc.name, mi.name`,
+    []
+  );
 
-        // Group menu items by category for display
-        const menuByCategory = {};
-        menuItems.forEach(item => {
-            if (!menuByCategory[item.category_name]) {
-                menuByCategory[item.category_name] = [];
-            }
-            menuByCategory[item.category_name].push(item);
-        });
+  const menuByCategory = items.reduce((acc, it) => {
+    (acc[it.category] ??= []).push(it);
+    return acc;
+  }, /** @type {Record<string, any[]>} */ ({}));
 
-        return { 
-            menuByCategory,
-            user: locals.user 
-        };
-    } catch (error) {
-        console.error('Error loading menu data:', error);
-        throw new Error('Failed to load menu data');
-    }
+  return { user: locals.user ?? null, menuByCategory };
 }
 
-// Handle page actions
 export const actions = {
-    // Create a new reservation
-    createReservation: async ({ request, locals }) => {
-        const formData = await request.formData();
-        const name = formData.get('name')?.trim();
-        const email = formData.get('email')?.trim();
-        const phone = formData.get('phone')?.trim();
-        const reservation_date = formData.get('reservation_date');
-        const party_size = parseInt(formData.get('party_size'), 10);
-        const special_requests = formData.get('special_requests')?.trim();
-        
-        // Basic validation
-        if (!name || !email || !reservation_date || isNaN(party_size) || party_size < 1) {
-            return fail(400, {
-                success: false,
-                message: 'Invalid input: Required fields are missing or invalid.'
-            });
-        }
+  createReservation: async ({ request, locals }) => {
+    const fd = await request.formData();
+    const name = fd.get('name')?.toString().trim();
+    const email = fd.get('email')?.toString().trim();
+    const phone = fd.get('phone')?.toString().trim() || null;
+    const reservation_date = fd.get('reservation_date')?.toString();
+    const party_size = Number(fd.get('party_size'));
+    const special_requests = fd.get('special_requests')?.toString().trim() || null;
 
-        // Get user ID if logged in
-        const user_id = locals.user ? locals.user.id : null;
-
-        try {
-            // Use the query helper for efficient execution
-            await query(
-                'INSERT INTO reservations (user_id, name, email, phone, reservation_date, party_size, special_requests) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                [user_id, name, email, phone, reservation_date, party_size, special_requests]
-            );
-
-            return {
-                success: true,
-                message: 'Reservation created successfully!'
-            };
-        } catch (error) {
-            console.error('Error creating reservation:', error);
-            return fail(500, {
-                success: false,
-                message: 'Failed to create reservation due to a server error.'
-            });
-        }
+    if (!name || !email || !reservation_date || !Number.isFinite(party_size) || party_size < 1) {
+      return fail(400, { ok: false, message: 'Please fill required fields correctly.' });
     }
+
+    const user_id = locals.user?.id ?? null;
+
+    try {
+      await query(
+        `INSERT INTO reservations
+           (user_id, name, email, phone, reservation_date, party_size, special_requests)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [user_id, name, email, phone, reservation_date, party_size, special_requests]
+      );
+      return { ok: true, message: 'Reservation created. See you soon!' };
+    } catch (err) {
+      console.error('Reservation error:', err);
+      return fail(500, { ok: false, message: 'Server error. Please try again.' });
+    }
+  }
 };
